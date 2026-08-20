@@ -220,33 +220,47 @@ tr.row-loss:hover td { background: #fbe2e2; }
 
 .disclaimer { color: #b3b8c2; font-size: 11px; margin-top: 22px; text-align: center; }
 
-/* ---------- 移动端适配 ---------- */
+/* ---------- 移动端卡片(窄屏用卡片流替代表格) ---------- */
+.m-cards { display: none; }
 @media (max-width: 720px) {
-  body { padding: 14px 12px; padding-bottom: calc(14px + env(safe-area-inset-bottom)); font-size: 13px; }
-  .header-row { flex-direction: column; align-items: flex-start; gap: 10px; margin-bottom: 12px; }
-  h1 { font-size: 18px; }
+  body { padding: 12px 10px; padding-bottom: calc(12px + env(safe-area-inset-bottom)); font-size: 13px; }
+  .header-row { flex-direction: column; align-items: flex-start; gap: 10px; margin-bottom: 10px; }
+  h1 { font-size: 17px; }
+  .sub { font-size: 11px; }
   .nav-bar { overflow-x: auto; flex-wrap: nowrap; width: 100%; padding-bottom: 4px; -webkit-overflow-scrolling: touch; }
   .nav-pill { flex-shrink: 0; min-height: 34px; display: inline-flex; align-items: center; }
-  .card { padding: 14px 14px; margin-bottom: 10px; border-radius: 8px; }
-  .row { gap: 10px; }
-  .hint { max-width: none; }
-  .btn { min-height: 44px; padding: 10px 24px; }
+  .card { padding: 12px; margin-bottom: 10px; border-radius: 10px; }
+  h2 { font-size: 14px; }
+  .hint { max-width: none; font-size: 11px; }
+  .btn { min-height: 44px; padding: 10px 24px; width: 100%; }
   .progress-wrap { width: 100%; }
-  .stat { gap: 18px; }
-  .stat .item b { font-size: 20px; }
-  /* 宽表格: 横向滚动, 表头首列吸附 */
-  .scrollbox { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  table { width: max-content; min-width: 100%; }
-  th, td { padding: 8px 10px; }
-  th:first-child, td:first-child { position: sticky; left: 0; background: #fff; z-index: 1; }
-  tr:hover td:first-child { background: #f7faff; }
-  .ellip { max-width: 180px; }
-  .ellip.s { max-width: 110px; }
+  .stat { gap: 14px; flex-wrap: wrap; }
+  .stat .item b { font-size: 19px; }
+  .cond-card { min-width: 100%; flex: 1 1 100%; }
   .tabbar { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
   .tab { flex-shrink: 0; min-height: 38px; display: inline-flex; align-items: center; }
-  .cond-card { min-width: 46%; flex: 1; }
   .handbook-col { min-width: 100%; }
   .sticky-checklist { top: 4px; padding: 8px 12px; font-size: 12px; }
+  .scrollbox { display: none; }   /* 表格在窄屏隐藏 */
+  .m-cards { display: block; max-height: none; overflow: visible; }
+
+  /* ---- 通用卡片 ---- */
+  .m-card { background: #fff; border: 1px solid #e8eaee; border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; }
+  .m-card .top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+  .m-card .name { font-size: 15px; font-weight: 700; }
+  .m-card .code { font-size: 12px; color: #8a919f; }
+  .m-card .price { margin-left: auto; font-size: 14px; font-weight: 600; }
+  .m-card .tags { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 6px; }
+  .m-card .mtag { font-size: 10px; padding: 1px 7px; border-radius: 3px; background: #eef3fb; color: #1a6ee0; }
+  .m-card .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 10px; font-size: 12px; margin-bottom: 6px; }
+  .m-card .metrics .k { color: #8a919f; }
+  .m-card .reason { white-space: normal; line-height: 1.5; }
+  .m-card.win { border-left: 3px solid #1a7a3a; background: #f4faf6; }
+  .m-card.loss { border-left: 3px solid #c0392b; background: #fdf6f6; }
+  .m-card.strong { border-left: 3px solid #c0392b; }
+  /* 评分大徽章 */
+  .score-badge { min-width: 44px; height: 44px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+                 font-size: 16px; font-weight: 700; color: #fff; flex-shrink: 0; }
 }
 </style>
 </head>
@@ -290,6 +304,7 @@ tr.row-loss:hover td { background: #fbe2e2; }
     <thead><tr><th>板块</th><th>类型</th><th>状态</th><th>当日均涨%</th><th>5日均涨%</th><th>量比</th><th>上涨占比%</th><th>多周期全红%</th><th>成员</th><th>触发原因</th></tr></thead>
     <tbody></tbody>
   </table></div>
+  <div class="m-cards" id="mSectors"></div>
 </div>
 
 <div class="card" id="sec-l3">
@@ -305,6 +320,7 @@ tr.row-loss:hover td { background: #fbe2e2; }
     <thead><tr><th>代码</th><th>名称</th><th>现价</th><th>5日%</th><th>10日%</th><th>20日%</th><th>距MA20%</th><th>250日位置%</th><th>量比</th><th>ATR%</th><th>所属板块</th><th>触发原因</th></tr></thead>
     <tbody></tbody>
   </table></div>
+  <div class="m-cards" id="mStocks"></div>
 </div>
 
 <div class="card" id="sec-action">
@@ -317,6 +333,7 @@ tr.row-loss:hover td { background: #fbe2e2; }
     <thead><tr><th>评分</th><th>代码</th><th>名称</th><th>现价</th><th>参考介入</th><th>止损价</th><th>止损幅度</th><th>评分明细</th><th>所属板块</th></tr></thead>
     <tbody></tbody>
   </table></div>
+  <div class="m-cards" id="mActions"></div>
 </div>
 
 </div>
@@ -369,6 +386,7 @@ tr.row-loss:hover td { background: #fbe2e2; }
       <tbody></tbody>
     </table>
   </div>
+  <div class="m-cards" id="mRecon"></div>
 </div>
 
 <div class="disclaimer">本工具仅做数据分类展示, 不构成任何投资建议。阈值可在 funnel/config.py 调整。</div>
@@ -516,6 +534,24 @@ function renderSectors(d) {
       <td class="reason"><span class="ellip" title="${s.reasons.join("; ")}">${s.reasons.join("; ") || "-"}</span></td>
     </tr>`;
   }).join("");
+  // 移动端卡片
+  document.getElementById("mSectors").innerHTML = d.layer2.slice(0, 30).map(s => {
+    const isStrong = strong.has(s.name);
+    return `<div class="m-card ${isStrong ? 'strong' : ''}">
+      <div class="top">
+        <span class="name" style="${isStrong ? 'color:#c0392b' : ''}">${s.name}</span>
+        <span class="code">${s.type === "industry" ? "行业" : "概念"} · ${STATE_TXT[s.state] || s.state} · ${s.member_count}成员</span>
+      </div>
+      <div class="metrics">
+        <span><span class="k">当日均涨 </span>${fmtPct(s.avg_zdf)}%</span>
+        <span><span class="k">5日均涨 </span>${fmtPct(s.avg_d5)}%</span>
+        <span><span class="k">量比 </span>${s.avg_lb > 0 ? s.avg_lb.toFixed(2) : "-"}</span>
+        <span><span class="k">上涨占比 </span>${s.up_ratio}%</span>
+        <span><span class="k">多周期红 </span>${s.multi_pos_ratio}%</span>
+      </div>
+      <div class="reason">${s.reasons.join("; ") || "-"}</div>
+    </div>`;
+  }).join("");
 }
 
 function renderL3(d) {
@@ -579,6 +615,28 @@ function switchAction(act) {
   }).join("") || '<tr><td colspan="9" style="text-align:center;color:#999">该档无股票(这是常态: 可介入档经常为空, 宁缺毋滥)</td></tr>';
   const at = document.querySelector("#actionTable tbody");
   at.classList.remove("fade-in"); void at.offsetWidth; at.classList.add("fade-in");
+  // 移动端卡片: 评分徽章+关键价位突出
+  document.getElementById("mActions").innerHTML = stocks.map(m => {
+    const plan = m.plan || {};
+    const color = m.score >= 72 ? "#c0392b" : (m.score >= 45 ? "#1a6ee0" : "#1a7a3a");
+    const bd = (m.score_breakdown || []).map(b => `${b.name}${b.score}/${b.max}`).join(" ");
+    return `<div class="m-card">
+      <div class="top">
+        <span class="score-badge" style="background:${color}">${m.score}</span>
+        <div style="flex:1;min-width:0">
+          <span class="name">${m.name}</span> <span class="code">${m.code}</span>
+          ${m.market_adj ? `<span class="code"> 大盘${m.market_adj > 0 ? "+" : ""}${m.market_adj}</span>` : ""}
+        </div>
+        <span class="price">${m.price}</span>
+      </div>
+      <div class="metrics" style="grid-template-columns:repeat(3,1fr)">
+        <span><span class="k">介入 </span><b>${plan.entry_txt || "-"}</b></span>
+        <span><span class="k">止损 </span><b>${plan.stop ? plan.stop : "-"}</b></span>
+        <span><span class="k">止损幅 </span><b>${plan.loss_pct ? "-" + plan.loss_pct + "%" : "-"}</b></span>
+      </div>
+      <div class="reason">${bd}</div>
+    </div>`;
+  }).join("") || '<div class="m-card" style="text-align:center;color:#999">该档无股票(可介入档经常为空, 宁缺毋滥)</div>';
 }
 
 function renderTabs(d) {
@@ -604,6 +662,23 @@ function switchTab(cat) {
   </tr>`).join("") || '<tr><td colspan="12" style="text-align:center;color:#999">该分类下无股票</td></tr>';
   const st = document.querySelector("#stockTable tbody");
   st.classList.remove("fade-in"); void st.offsetWidth; st.classList.add("fade-in");
+  // 移动端卡片
+  document.getElementById("mStocks").innerHTML = stocks.map(m => `<div class="m-card">
+    <div class="top">
+      <span class="name">${m.name}</span> <span class="code">${m.code}</span>
+      <span class="price">${m.price}</span>
+    </div>
+    <div class="tags">${(m.boards || []).map(b => `<span class="mtag">${b}</span>`).join("")}</div>
+    <div class="metrics">
+      <span><span class="k">5日 </span>${fmtPct(m.d5)}%</span>
+      <span><span class="k">10日 </span>${fmtPct(m.d10)}%</span>
+      <span><span class="k">20日 </span>${fmtPct(m.d20)}%</span>
+      <span><span class="k">距MA20 </span>${fmtPct(m.ma20_dist)}%</span>
+      <span><span class="k">250日位 </span>${m.position_pct ?? "-"}%</span>
+      <span><span class="k">量比 </span>${m.lb > 0 ? m.lb.toFixed(2) : "-"}</span>
+    </div>
+    <div class="reason">${m.reasons.map(r => m.atr_flag && r.includes("波动过大") ? r + "(波动异常)" : r).join("；")}</div>
+  </div>`).join("") || '<div class="m-card" style="text-align:center;color:#999">该分类下无股票</div>';
 }
 
 loadResult();
@@ -662,6 +737,25 @@ async function renderHistory() {
   </tr>`).join("") || '<tr><td colspan="12" style="color:#999">暂无可介入股记录</td></tr>';
   const tb = document.querySelector("#reconTable tbody");
   tb.classList.remove("fade-in"); void tb.offsetWidth; tb.classList.add("fade-in");
+  // 移动端卡片: 盈亏底色直观
+  document.getElementById("mRecon").innerHTML = allRows.map(({date, x, cls, verdict}) => {
+    const mcls = cls === "row-win" ? "win" : (cls === "row-loss" ? "loss" : "");
+    return `<div class="m-card ${mcls}">
+      <div class="top">
+        <span class="name">${x.name}</span> <span class="code">${x.code}</span>
+        <span class="price" style="color:${cls === 'row-win' ? '#1a7a3a' : (cls === 'row-loss' ? '#c0392b' : '#8a919f')}">${fmtPct(x.return_pct)}%</span>
+      </div>
+      <div class="metrics">
+        <span><span class="k">归档 </span>${date}</span>
+        <span><span class="k">评分 </span>${x.score ?? "-"}</span>
+        <span><span class="k">持有 </span>${x.held_days ?? "-"}天</span>
+        <span><span class="k">介入 </span>${x.entry ?? "-"}</span>
+        <span><span class="k">止损 </span>${x.stop ?? "-"}</span>
+        <span><span class="k">最高 </span>${x.peak_gain_pct !== null && x.peak_gain_pct !== undefined ? "+" + x.peak_gain_pct.toFixed(1) + "%" : "-"}</span>
+      </div>
+      <div class="reason">卖出: ${x.sell_date || (x.sold === false ? "持有中" : "-")} · ${x.sell_reason || "-"} · <b>${verdict}</b></div>
+    </div>`;
+  }).join("") || '<div class="m-card" style="text-align:center;color:#999">暂无可介入股记录</div>';
 }
 </script>
 </body>
