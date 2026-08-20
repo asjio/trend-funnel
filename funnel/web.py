@@ -10,14 +10,18 @@ import datetime
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from .logic.pipeline import run_funnel, save_result, list_history, load_history, reconcile_history
 from .config import CONFIG
 
 DATA_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "data"))
 RESULT_FILE = os.path.join(DATA_DIR, "result.json")
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
 app = FastAPI()
+# PWA静态资源(manifest/图标/sw), 用相对路径访问, nginx反代到子路径时不受影响
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 _state = {"running": False, "stage": "", "detail": "", "pct": 0, "error": None}
 _lock = threading.Lock()
@@ -86,10 +90,33 @@ def index():
     return PAGE
 
 
+@app.get("/sw.js")
+def service_worker():
+    """SW必须部署在根路径才能控制整站(scope限制)"""
+    from fastapi.responses import Response
+    with open(os.path.join(STATIC_DIR, "sw.js"), encoding="utf-8") as f:
+        return Response(content=f.read(), media_type="application/javascript")
+
+
+@app.get("/manifest.json")
+def manifest():
+    """manifest部署在根路径: start_url/scope的相对'.'才能解析到应用首页"""
+    with open(os.path.join(STATIC_DIR, "manifest.json"), encoding="utf-8") as f:
+        return JSONResponse(content=json.load(f))
+
+
 PAGE = r"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#1a6ee0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="趋势漏斗">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" href="static/icon-192.png">
+<link rel="apple-touch-icon" href="static/icon-192.png">
 <title>趋势筛选工作台</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -192,6 +219,35 @@ tr.row-loss:hover td { background: #fbe2e2; }
 .hb-item b { color: #1f2329; }
 
 .disclaimer { color: #b3b8c2; font-size: 11px; margin-top: 22px; text-align: center; }
+
+/* ---------- 移动端适配 ---------- */
+@media (max-width: 720px) {
+  body { padding: 14px 12px; padding-bottom: calc(14px + env(safe-area-inset-bottom)); font-size: 13px; }
+  .header-row { flex-direction: column; align-items: flex-start; gap: 10px; margin-bottom: 12px; }
+  h1 { font-size: 18px; }
+  .nav-bar { overflow-x: auto; flex-wrap: nowrap; width: 100%; padding-bottom: 4px; -webkit-overflow-scrolling: touch; }
+  .nav-pill { flex-shrink: 0; min-height: 34px; display: inline-flex; align-items: center; }
+  .card { padding: 14px 14px; margin-bottom: 10px; border-radius: 8px; }
+  .row { gap: 10px; }
+  .hint { max-width: none; }
+  .btn { min-height: 44px; padding: 10px 24px; }
+  .progress-wrap { width: 100%; }
+  .stat { gap: 18px; }
+  .stat .item b { font-size: 20px; }
+  /* 宽表格: 横向滚动, 表头首列吸附 */
+  .scrollbox { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { width: max-content; min-width: 100%; }
+  th, td { padding: 8px 10px; }
+  th:first-child, td:first-child { position: sticky; left: 0; background: #fff; z-index: 1; }
+  tr:hover td:first-child { background: #f7faff; }
+  .ellip { max-width: 180px; }
+  .ellip.s { max-width: 110px; }
+  .tabbar { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
+  .tab { flex-shrink: 0; min-height: 38px; display: inline-flex; align-items: center; }
+  .cond-card { min-width: 46%; flex: 1; }
+  .handbook-col { min-width: 100%; }
+  .sticky-checklist { top: 4px; padding: 8px 12px; font-size: 12px; }
+}
 </style>
 </head>
 <body>
@@ -358,12 +414,12 @@ function fmtPct(v) {
 async function runFunnel() {
   document.getElementById("runBtn").disabled = true;
   document.getElementById("pbar").style.display = "block";
-  await fetch("/api/run", {method: "POST"});
+  await fetch("api/run", {method: "POST"});
   pollStatus();
 }
 
 async function pollStatus() {
-  const r = await fetch("/api/status"); const s = await r.json();
+  const r = await fetch("api/status"); const s = await r.json();
   const pfill = document.getElementById("pfill"), ptxt = document.getElementById("ptxt");
   pfill.style.width = s.pct + "%";
   ptxt.textContent = s.running ? `${s.pct}% ${s.detail}` : "";
@@ -375,7 +431,7 @@ async function pollStatus() {
 }
 
 async function loadResult() {
-  const r = await fetch("/api/result");
+  const r = await fetch("api/result");
   if (!r.ok) return;
   const d = await r.json();
   if (d.ok === false) return;
@@ -552,9 +608,14 @@ function switchTab(cat) {
 
 loadResult();
 
+// PWA: 注册Service Worker(根路径部署, scope覆盖整站, 兼容子路径反代)
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
 async function renderHistory() {
   // 拉全部归档日期, 逐日对账, 汇总成一张表
-  const r = await fetch("/api/history");
+  const r = await fetch("api/history");
   const list = await r.json();
   const tbody = document.querySelector("#reconTable tbody");
   const stats = document.getElementById("reconStats");
@@ -566,7 +627,7 @@ async function renderHistory() {
   const allRows = [];
   let winCnt = 0, lossCnt = 0, sumRet = 0, soldCnt = 0;
   for (const h of list) {
-    const rr = await fetch(`/api/history/${h.date}/reconcile`);
+    const rr = await fetch(`api/history/${h.date}/reconcile`);
     const d = await rr.json();
     if (d.ok === false) continue;
     for (const x of (d.items || [])) {
