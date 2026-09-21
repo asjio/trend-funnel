@@ -80,7 +80,7 @@ def simulate_exit(code, entry_price, stop_price, entry_date):
 
         # 规则4: 时间止损
         if held_days >= er["time_stop_days"] and cur_gain < er["time_stop_min_gain"]:
-            return {"sell_date": date, "sell_price": close, "sell_reason": f"时间止损({held_days}日仅+{cur_gain:.1f}%)",
+            return {"sell_date": date, "sell_price": close, "sell_reason": f"时间止损({held_days}日仅{cur_gain:+.1f}%)",
                     "return_pct": round(cur_gain, 2), "held_days": held_days,
                     "peak_gain_pct": round(peak_gain, 2)}
 
