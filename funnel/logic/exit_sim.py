@@ -26,7 +26,11 @@ def simulate_exit(code, entry_price, stop_price, entry_date):
         return {"sell_date": None, "sell_price": None, "sell_reason": "K线获取失败",
                 "return_pct": None, "held_days": 0, "peak_gain_pct": None}
 
-    bars = strip_today(bars, today)
+    # 盘中(15:00前)今日K线是脏数据必须剥离; 收盘后今日K线完整保留,
+    # 这样买入日=归档次日的股票, 当日收盘后即可回放判定(而非永远"待买入")
+    now = datetime.datetime.now()
+    if now.hour < 15 or (now.hour == 15 and now.minute < 1):
+        bars = strip_today(bars, today)
     # 只取entry_date之后的K线
     future_bars = [b for b in bars if b[0] > entry_date]
     if not future_bars:

@@ -21,6 +21,23 @@ def main():
 
     # 摘要
     meta, l1 = result["meta"], result["layer1"]
+    # 微信通知 (Server酱, 未配置自动跳过)
+    try:
+        import datetime
+        from .notifier import send as _send
+        meta, l1 = result["meta"], result["layer1"]
+        lines = [
+            f"大盘环境: {l1['env']} ({l1['passed']}/3)",
+            f"强板块({len(result['strong_sectors'])}): {'、'.join(result['strong_sectors'][:6])}",
+            f"候选个股: {meta['candidate_count']}只, K线成功: {meta['kline_count']}只",
+        ]
+        for cat, stocks in result["layer4"].items():
+            names = " ".join(m2["name"] for m2 in stocks[:5])
+            lines.append(f"{cat}({len(stocks)}): {names}")
+        _send(f"趋势漏斗 {datetime.date.today()} {l1['env']}", "\n".join(lines))
+    except Exception as e:
+        print(f"[通知] 跳过: {e}", flush=True)
+
     print(f"\n=== 大盘环境: {l1['env']} ({l1['passed']}/3) ===")
     for r in l1["reasons"]:
         print("  ", r)

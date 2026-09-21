@@ -6,3 +6,4 @@ data/
 .playwright-cli/
 _setup.py
 _make_bat.py
+*.bak-*

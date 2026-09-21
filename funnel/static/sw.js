@@ -1,5 +1,5 @@
 // 趋势漏斗 Service Worker: 网络优先, 失败回退缓存(数据页需新鲜, 不做纯离线)
-const CACHE = 'funnel-v1';
+const CACHE = 'funnel-v3';
 
 self.addEventListener('install', () => self.skipWaiting());
 

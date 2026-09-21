@@ -39,9 +39,39 @@ def _sina_kline(code_tx, days):
         return None
 
 
+# 进程内K线缓存: 历史复盘要为 21+ 个归档日期逐日对账, 而同一只股票会反复出现在
+# 不同日期的名单里, 无缓存时会产生数百次重复的跨太平洋请求(实测整页 52s)。
+# TTL 设 10 分钟: 够覆盖一次完整复盘加载, 又不会让盘中/收盘后的数据长期不新鲜。
+_KLINE_CACHE = {}
+_KLINE_CACHE_TS = {}
+_KLINE_TTL = 1800
+_KLINE_MAX = 1500
+
+
+def _cache_get(key):
+    ts = _KLINE_CACHE_TS.get(key)
+    if ts is None or time.time() - ts >= _KLINE_TTL:
+        return None
+    return _KLINE_CACHE.get(key)
+
+
+def _cache_put(key, rows):
+    if not rows:
+        return
+    if len(_KLINE_CACHE) >= _KLINE_MAX:          # 满了丢掉最旧的一半
+        for k in sorted(_KLINE_CACHE_TS, key=lambda x: _KLINE_CACHE_TS[x])[:_KLINE_MAX // 2]:
+            _KLINE_CACHE.pop(k, None)
+            _KLINE_CACHE_TS.pop(k, None)
+    _KLINE_CACHE[key] = rows
+    _KLINE_CACHE_TS[key] = time.time()
+
+
 def fetch_kline(code6, days=260, retries=2):
     """腾讯qfq主源 -> 新浪兜底. 返回 [(date,open,close,high,low,vol)...] 已剥离今日行"""
     tx_code = _to_tx_code(code6)
+    cached = _cache_get((tx_code, days))
+    if cached is not None:
+        return cached
     url = KLINE_URL.format(code=tx_code, days=days)
     for i in range(retries):
         try:
@@ -57,11 +87,14 @@ def fetch_kline(code6, days=260, retries=2):
                         rows.append((b[0], float(b[1]), float(b[2]), float(b[3]), float(b[4]), float(b[5])))
                     except (ValueError, IndexError):
                         continue
+                _cache_put((tx_code, days), rows)
                 return rows
         except Exception:
             time.sleep(0.5 * (i + 1))
     # 腾讯失败(501限流等), 新浪兜底
-    return _sina_kline(tx_code, days)
+    rows = _sina_kline(tx_code, days)
+    _cache_put((tx_code, days), rows)
+    return rows
 
 
 def fetch_klines_batch(codes, days=260, threads=12, progress_cb=None):

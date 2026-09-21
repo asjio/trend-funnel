@@ -19,6 +19,14 @@ def _today_str():
     return datetime.date.today().strftime("%Y-%m-%d")
 
 
+def _strip_today_smart(bars, today):
+    """盘中(15:00前)今日K线是脏数据必须剥离; 收盘后保留今日完整行"""
+    now = datetime.datetime.now()
+    if now.hour < 15 or (now.hour == 15 and now.minute < 1):
+        return kline.strip_today(bars, today)
+    return bars
+
+
 def _f(x, nd=2):
     try:
         return round(float(x), nd)
@@ -64,12 +72,12 @@ def layer1_market(snapshot_rows, progress_cb=None):
     conditions = []
 
     # 指数K线: 腾讯主源, 新浪兜底(防501限流)
-    bars = kline.strip_today(kline.fetch_kline(idx_code, days=mc["ma_period"] + 5) or [], today)
+    bars = _strip_today_smart(kline.fetch_kline(idx_code, days=mc["ma_period"] + 5) or [], today)
     src = "腾讯"
     if len(bars) < mc["ma_period"]:
         sb = _sina_index_kline(idx_code, mc["ma_period"] + 5)
         if sb:
-            bars = kline.strip_today(sb, today)
+            bars = _strip_today_smart(sb, today)
             src = "新浪兜底"
     closes = [b[2] for b in bars]
     idx_ma = ma(closes, mc["ma_period"]) if len(closes) >= mc["ma_period"] else None
@@ -306,7 +314,7 @@ def layer4_classify(stocks_metrics, snapshot_map):
 def _compute_stock_metrics(code, kbars, snap):
     """拼今日价 -> 计算 MA20/ATR/分位/多周期涨幅"""
     today = _today_str()
-    kbars = kline.strip_today(kbars, today)
+    kbars = _strip_today_smart(kbars, today)
     price = snap.get("zxj") or (kbars[-1][2] if kbars else None)
     if not kbars or not price:
         return None

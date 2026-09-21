@@ -8,7 +8,7 @@ import os
 import threading
 import datetime
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -83,6 +83,68 @@ def api_history_reconcile(date: str):
     if r is None:
         return JSONResponse({"ok": False, "msg": f"无{date}的归档"})
     return r
+
+
+@app.get("/api/holdings")
+def holdings_get():
+    from .logic.holding import judge_all
+    try:
+        return {"holdings": judge_all()}
+    except Exception as e:
+        return {"holdings": [], "error": str(e)}
+
+
+@app.post("/api/holdings")
+async def holdings_post(request: Request):
+    from .logic.holding import load_holdings, save_holdings, find_from_archive
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "msg": "JSON格式错误"}, status_code=400)
+    code = str(body.get("code", "")).strip()
+    if not code:
+        return JSONResponse({"ok": False, "msg": "缺少股票代码"}, status_code=400)
+    code6 = code.lower()
+    if not code6.startswith(("sh", "sz")):
+        code6 = ("sh" if code6[0] in "69" else "sz") + code6
+    for f in ("cost", "qty", "buy_date"):
+        if f not in body or body[f] in (None, ""):
+            return JSONResponse({"ok": False, "msg": f"缺少必填字段 {f}"}, status_code=400)
+    try:
+        cost = float(body["cost"])
+        qty = int(body["qty"])
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "msg": "成本价/数量格式错误"}, status_code=400)
+    name, stop = find_from_archive(code6)
+    if body.get("stop") not in (None, ""):
+        stop = float(body["stop"])
+    if stop is None:
+        return JSONResponse({"ok": False, "msg": "未在最近归档匹配到止损价, 请补stop参数"}, status_code=400)
+    if not body.get("name") and not name:
+        name = code6
+    holdings = load_holdings()
+    for h in holdings:
+        if str(h.get("code", "")).lower() == code6:
+            return JSONResponse({"ok": False, "msg": "该股票已在持仓中"}, status_code=400)
+    holdings.append({
+        "code": code6, "name": body.get("name") or name,
+        "cost": cost, "qty": qty, "buy_date": str(body["buy_date"]),
+        "stop": stop,
+    })
+    save_holdings(holdings)
+    return {"ok": True, "msg": "已添加", "name": body.get("name") or name, "stop": stop}
+
+
+@app.delete("/api/holdings/{code}")
+def holdings_delete(code: str):
+    from .logic.holding import load_holdings, save_holdings
+    target = code.lower()
+    holdings = load_holdings()
+    kept = [h for h in holdings if str(h.get("code", "")).lower() != target]
+    if len(kept) == len(holdings):
+        return JSONResponse({"ok": False, "msg": "未找到该持仓"}, status_code=404)
+    save_holdings(kept)
+    return {"ok": True, "msg": "已移除"}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -173,6 +235,35 @@ tbody.fade-in { animation: fadeUp .3s ease; }
          white-space: nowrap; vertical-align: bottom; }
 .ellip.s { max-width: 150px; }
 
+/* ---------- 历史复盘: 按日期分组 ---------- */
+.rgroup { border: 1px solid #e8eaee; border-radius: 10px; margin-bottom: 9px; overflow: hidden; background: #fff; }
+.rgroup-head { display: flex; align-items: center; gap: 9px; padding: 10px 14px; cursor: pointer;
+               user-select: none; transition: background .15s; flex-wrap: wrap; background: #fafbfc; }
+.rgroup-head:hover { background: #f1f4f9; }
+.rgroup-head .arrow { display: inline-block; color: #8a919f; font-size: 11px; width: 10px; transition: transform .18s; }
+.rgroup.open .rgroup-head .arrow { transform: rotate(90deg); }
+.rgroup-head .gdate { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.rgroup-head .genv { font-size: 11px; padding: 1px 7px; border-radius: 3px; background: #eef3fb; color: #1a6ee0; }
+.rgroup-head .genv.weak { background: #eef8f1; color: #1a7a3a; }
+.rgroup-head .genv.strong { background: #fdeeee; color: #c0392b; }
+.rgroup-head .gmeta { font-size: 12px; color: #8a919f; }
+.rgroup-head .gnum { margin-left: auto; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.rgroup-body { display: none; padding: 10px 14px 14px; border-top: 1px solid #eef0f3; }
+.rgroup.open .rgroup-body { display: block; }
+.rgroup-body .sub-h { font-size: 12px; color: #8a919f; margin: 0 0 6px; }
+.trend-panel { margin-bottom: 12px; padding: 10px 12px 6px; border: 1px solid #e8eaee;
+               border-radius: 10px; background: #fafbfc; }
+.trend-panel .tp-title { font-size: 12px; color: #8a919f; margin-bottom: 6px; }
+.trend-panel svg { display: block; width: 100%; height: auto; }
+.bar-row { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-bottom: 3px; }
+.bar-row .bn { width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #5a6270; }
+.bar-row .bt { flex: 1; height: 11px; background: #f0f2f5; border-radius: 2px; position: relative; overflow: hidden; }
+.bar-row .bt::after { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: #e3e7ec; }
+.bar-row .bf { position: absolute; top: 0; bottom: 0; border-radius: 2px; z-index: 1; }
+.bar-row .bv { width: 58px; text-align: right; font-variant-numeric: tabular-nums; }
+.hbar-tools { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.hbar-tools .nav-pill { padding: 4px 12px; }
+
 /* ---------- 统计数字 ---------- */
 .stat { display: flex; gap: 32px; flex-wrap: wrap; }
 .stat .item b { font-size: 24px; font-weight: 700; display: block; font-variant-numeric: tabular-nums; line-height: 1.3; }
@@ -206,11 +297,11 @@ tbody.fade-in { animation: fadeUp .3s ease; }
 .checklist-toggle { cursor: pointer; user-select: none; font-weight: 600; }
 .checklist-body { margin-top: 4px; }
 
-/* 复盘对错行底色 */
-tr.row-win td { background: #eef8f1; }
-tr.row-win:hover td { background: #e2f3e7; }
-tr.row-loss td { background: #fdeeee; }
-tr.row-loss:hover td { background: #fbe2e2; }
+/* 复盘对错行底色(红=赚, 绿=亏, 与 .up/.down 一致) */
+tr.row-win td { background: #fdeeee; }
+tr.row-win:hover td { background: #fbe2e2; }
+tr.row-loss td { background: #eef8f1; }
+tr.row-loss:hover td { background: #e2f3e7; }
 
 /* 交易手册三栏 */
 .handbook-col { flex: 1; min-width: 260px; background: #fafbfc; border: 1px solid #eef0f3; border-radius: 8px; padding: 14px 16px; }
@@ -255,13 +346,42 @@ tr.row-loss:hover td { background: #fbe2e2; }
   .m-card .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 10px; font-size: 12px; margin-bottom: 6px; }
   .m-card .metrics .k { color: #8a919f; }
   .m-card .reason { white-space: normal; line-height: 1.5; }
-  .m-card.win { border-left: 3px solid #1a7a3a; background: #f4faf6; }
-  .m-card.loss { border-left: 3px solid #c0392b; background: #fdf6f6; }
+  .m-card.win { border-left: 3px solid #c0392b; background: #fdf6f6; }
+  .m-card.loss { border-left: 3px solid #1a7a3a; background: #f4faf6; }
   .m-card.strong { border-left: 3px solid #c0392b; }
+  .rgroup-head { padding: 9px 10px; gap: 7px; }
+  .rgroup-body { padding: 8px 10px 12px; }
+  .bar-row .bn { width: 64px; }
+  .bar-row .bv { width: 50px; }
   /* 评分大徽章 */
   .score-badge { min-width: 44px; height: 44px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
                  font-size: 16px; font-weight: 700; color: #fff; flex-shrink: 0; }
 }
+/* ---------- 持仓去留 ---------- */
+#sec-holdings { border-left: 3px solid #1a6ee0; }
+.h-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px 18px; margin-bottom: 12px; }
+.h-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+.h-name { font-size: 15px; font-weight: 600; }
+.h-code { font-size: 12px; color: #9aa1ad; }
+.h-verdict { font-size: 15px; font-weight: 700; padding: 3px 12px; border-radius: 6px; background: #f3f4f6; color: #374151; }
+.h-verdict.sell { background: #fdecec; color: #c0392b; }
+.h-stats { display: flex; gap: 16px; font-size: 12px; color: #374151; flex-wrap: wrap; }
+.h-stats b { font-weight: 600; }
+.h-rules { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 14px; margin: 10px 0; }
+.h-rule { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 5px 10px; border-radius: 6px; }
+.h-rule .r-name { font-weight: 600; white-space: nowrap; }
+.h-rule .r-state { font-size: 11px; padding: 0 7px; border-radius: 4px; white-space: nowrap; }
+.h-rule .r-note { color: #4b5563; }
+.rule-red { background: #fdecec; } .rule-red .r-state { background: #c0392b; color: #fff; } .rule-red .r-name { color: #c0392b; }
+.rule-yellow { background: #fdf6e3; } .rule-yellow .r-state { background: #b07800; color: #fff; } .rule-yellow .r-name { color: #b07800; }
+.rule-green { background: #ecf7f2; } .rule-green .r-state { background: #1a7a3a; color: #fff; } .rule-green .r-name { color: #1a7a3a; }
+.holdings-add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+.holdings-add input { border: 1px solid #d1d5db; border-radius: 6px; padding: 6px 9px; font-size: 12px; width: auto; }
+.holdings-add .lbl { font-size: 12px; color: #666; }
+.del-btn { margin-left: auto; background: none; border: 1px solid #e5e7eb; border-radius: 6px; padding: 4px 12px; font-size: 12px; color: #666; cursor: pointer; }
+.del-btn:hover { border-color: #c0392b; color: #c0392b; }
+#hMsg { font-size: 12px; color: #666; }
+@media (max-width: 760px) { .h-rules { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -273,6 +393,19 @@ tr.row-loss:hover td { background: #fbe2e2; }
   <div class="nav-bar" id="navBar"></div>
 </div>
 
+<div class="card" id="sec-holdings">
+  <h2>持仓去留清单 <span style="font-size:12px;color:#888">每日 16:00 后自动判定 · 只认收盘价 · 任一规则触发即明日开盘卖出</span></h2>
+  <div id="holdingsList"><div class="hint" style="max-width:none">加载中...</div></div>
+  <div class="holdings-add">
+    <span class="lbl">代码</span><input id="hCode" placeholder="如 002166">
+    <span class="lbl">成本</span><input id="hCost" placeholder="6.756" style="width:70px">
+    <span class="lbl">数量</span><input id="hQty" placeholder="200" style="width:60px">
+    <span class="lbl">买入日</span><input id="hBuyDate" placeholder="2026-08-21" style="width:100px">
+    <button class="btn" style="padding:6px 18px" onclick="addHolding()">添加持仓</button>
+    <span id="hMsg"></span>
+  </div>
+</div>
+
 <div class="card">
   <div class="row" style="align-items:center">
     <button class="btn" id="runBtn" onclick="runFunnel()">运行筛选</button>
@@ -280,7 +413,7 @@ tr.row-loss:hover td { background: #fbe2e2; }
       <div class="progress-wrap" id="pbar"><div class="progress-bar" id="pfill"></div></div>
       <div class="progress-txt" id="ptxt"></div>
     </div>
-    <div class="hint">收盘后(15:30后)运行才是定稿; 每次运行自动归档历史, 不会丢失</div>
+    <div class="hint">收盘后(16:00后)运行才是定稿; 每次运行自动归档历史, 不会丢失</div>
     <div id="metaInfo" style="margin-left:auto; font-size:12px; color:#666; text-align:right"></div>
   </div>
 </div>
@@ -343,8 +476,8 @@ tr.row-loss:hover td { background: #fbe2e2; }
   <table>
     <thead><tr><th style="width:180px">时间</th><th>该做什么</th><th style="width:120px">状态</th></tr></thead>
     <tbody>
-      <tr><td><b>每个交易日 15:30后</b></td><td>打开本页面, 点"运行筛选", 等待约40秒出结果(自动归档)</td><td><span class="badge pre">必做</span></td></tr>
-      <tr><td>15:31</td><td>看"今日结论": 环境偏弱 -> 当天不操作; 正常/强 -> 看"行动决策"的可介入档, 记下评分最高2-3只的参考介入价和止损价</td><td><span class="badge pre">必做</span></td></tr>
+      <tr><td><b>每个交易日 16:00后</b></td><td>打开本页面, 点"运行筛选", 等待约40秒出结果(自动归档)</td><td><span class="badge pre">必做</span></td></tr>
+      <tr><td>16:01</td><td>看"今日结论": 环境偏弱 -> 当天不操作; 正常/强 -> 看"行动决策"的可介入档, 记下评分最高2-3只的参考介入价和止损价</td><td><span class="badge pre">必做</span></td></tr>
       <tr><td>次日 9:30-14:30</td><td>昨晚选出的股票, 在参考介入价附近挂单买入; 买入同时把止损价写进券商App条件单</td><td><span class="badge closed">仅昨日有可介入股时</span></td></tr>
       <tr><td>持仓期间</td><td>只做一件事: 收盘跌破止损价 -> 无条件卖出。不猜顶、不补仓、不加杠杆</td><td><span class="badge pre">纪律</span></td></tr>
       <tr><td>每周一次</td><td>看本页"历史复盘"对账: 胜率、哪只对了哪只错了, 检验筛选质量是否稳定</td><td><span class="badge closed">建议</span></td></tr>
@@ -378,14 +511,15 @@ tr.row-loss:hover td { background: #fbe2e2; }
 </div>
 
 <div class="card" id="sec-history">
-  <h2>历史复盘 <span style="font-size:12px;color:#888">卖出模拟: 按四条规则(硬止损/移动止盈/趋势破坏/时间止损)逐日回放K线判定卖出点。绿底=赚, 红底=亏</span></h2>
+  <h2>历史复盘 <span style="font-size:12px;color:#888">按归档日期分组(点日期行展开当日明细), 全部历史日期与趋势完整保留。卖出模拟: 按四条规则(硬止损/移动止盈/趋势破坏/时间止损)逐日回放K线判定卖出点。红=赚, 绿=亏</span></h2>
   <div class="stat" id="reconStats" style="margin-bottom:12px"></div>
-  <div class="scrollbox" style="max-height:420px">
-    <table id="reconTable">
-      <thead><tr><th>归档日期</th><th>代码</th><th>名称</th><th>评分</th><th>介入</th><th>止损</th><th>卖出日</th><th>卖出原因</th><th>持有天数</th><th>最高盈利%</th><th>收益率%</th><th>结果</th></tr></thead>
-      <tbody></tbody>
-    </table>
+  <div class="trend-panel" id="reconTrend" style="display:none"></div>
+  <div class="hbar-tools" id="reconTools" style="display:none">
+    <button class="nav-pill" onclick="toggleAllGroups(true)">全部展开</button>
+    <button class="nav-pill" onclick="toggleAllGroups(false)">全部折叠</button>
+    <span class="gmeta" id="reconHint"></span>
   </div>
+  <div id="reconGroups"></div>
   <div class="m-cards" id="mRecon"></div>
 </div>
 
@@ -449,6 +583,7 @@ async function pollStatus() {
 }
 
 async function loadResult() {
+  loadHoldings();
   const r = await fetch("api/result");
   if (!r.ok) return;
   const d = await r.json();
@@ -457,6 +592,73 @@ async function loadResult() {
   document.getElementById("content").style.display = "block";
   renderNav(); renderSummary(d); renderMeta(d); renderL1(d.layer1); renderSectors(d);
   renderL3(d); renderActionTabs(d); renderTabs(d); renderHistory();
+}
+
+async function loadHoldings() {
+  try {
+    const r = await fetch("api/holdings");
+    if (!r.ok) { document.getElementById("holdingsList").innerHTML = '<div class="hint" style="max-width:none">持仓服务不可用</div>'; return; }
+    const d = await r.json();
+    const list = d.holdings || [];
+    const box = document.getElementById("holdingsList");
+    if (!list.length) { box.innerHTML = '<div class="hint" style="max-width:none">暂无持仓登记, 添加后每日自动判定去留</div>'; return; }
+    box.innerHTML = list.map(renderHoldingCard).join("");
+  } catch (e) {
+    document.getElementById("holdingsList").innerHTML = '<div class="hint" style="max-width:none">持仓数据加载失败</div>';
+  }
+}
+
+function renderHoldingCard(h) {
+  const sell = h.verdict === "明日开盘卖出";
+  const cls = sell ? "h-verdict sell" : "h-verdict";
+  const earnCls = h.earn != null ? (h.earn >= 0 ? "up" : "down") : "";
+  const earnTxt = h.earn != null ? (h.earn >= 0 ? "+" : "") + h.earn.toFixed(2) + "%" : "--";
+  const peakTxt = h.peak_earn != null ? (h.peak_earn >= 0 ? "+" : "") + h.peak_earn.toFixed(2) + "%" : "--";
+  const rules = (h.rules || []).map(r => {
+    const stMap = { triggered: ["rule-red", "触发"], watch: ["rule-yellow", "临界"], safe: ["rule-green", "安全"] };
+    const st = stMap[r.status] || ["rule-green", "安全"];
+    return `<div class="h-rule ${st[0]}"><span class="r-name">${r.rule}</span><span class="r-state">${st[1]}</span><span class="r-note">${r.note}</span></div>`;
+  }).join("");
+  const err = h.error ? `<div class="hint" style="max-width:none;color:#c0392b">${h.error}</div>` : "";
+  return `<div class="h-card">
+    <div class="h-head">
+      <span class="h-name">${h.name}</span><span class="h-code">${h.code}</span>
+      <span class="${cls}">${h.verdict}</span>
+      <button class="del-btn" onclick="delHolding('${h.code}')">卖出移除</button>
+    </div>
+    <div class="h-stats">
+      <span>现价 <b>${h.last_close != null ? h.last_close.toFixed(2) : "--"}</b></span>
+      <span>成本 <b>${h.cost}</b></span>
+      <span>浮盈 <b class="${earnCls}">${earnTxt}</b></span>
+      <span>止损价 <b>${h.stop}</b></span>
+      <span>MA10 <b>${h.ma10 != null ? h.ma10.toFixed(2) : "--"}</b></span>
+      <span>持有 <b>${h.hold_days}</b> 个交易日</span>
+      <span>peak浮盈 <b class="${h.peak_earn >= 0 ? "up" : "down"}">${peakTxt}</b></span>
+    </div>
+    <div class="h-rules">${rules}</div>
+    ${err}
+  </div>`;
+}
+
+async function addHolding() {
+  const code = document.getElementById("hCode").value.trim();
+  const cost = document.getElementById("hCost").value.trim();
+  const qty = document.getElementById("hQty").value.trim();
+  const buyDate = document.getElementById("hBuyDate").value.trim();
+  const msg = document.getElementById("hMsg");
+  if (!code || !cost || !qty || !buyDate) { msg.textContent = "请填写代码/成本/数量/买入日期"; return; }
+  const r = await fetch("api/holdings", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code: code, cost: cost, qty: qty, buy_date: buyDate }) });
+  const d = await r.json();
+  if (d.ok) { msg.textContent = "已添加: " + (d.name || "") + " 止损 " + d.stop; loadHoldings(); }
+  else { msg.textContent = d.msg || "添加失败"; }
+}
+
+async function delHolding(code) {
+  if (!confirm("确认已卖出并移除该持仓?")) return;
+  const r = await fetch("api/holdings/" + code, { method: "DELETE" });
+  const d = await r.json();
+  if (d.ok) loadHoldings(); else alert(d.msg || "删除失败");
 }
 
 function renderNav() {
@@ -688,65 +890,154 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
-async function renderHistory() {
-  // 拉全部归档日期, 逐日对账, 汇总成一张表
-  const r = await fetch("api/history");
-  const list = await r.json();
-  const tbody = document.querySelector("#reconTable tbody");
-  const stats = document.getElementById("reconStats");
-  if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="9" style="color:#999">暂无历史归档, 先运行筛选</td></tr>';
-    return;
-  }
-  tbody.innerHTML = '<tr><td colspan="12" style="color:#888">卖出模拟回放中(逐只拉K线, 约需半分钟)...</td></tr>';
-  const allRows = [];
-  let winCnt = 0, lossCnt = 0, sumRet = 0, soldCnt = 0;
-  for (const h of list) {
-    const rr = await fetch(`api/history/${h.date}/reconcile`);
-    const d = await rr.json();
-    if (d.ok === false) continue;
-    for (const x of (d.items || [])) {
-      const ret = x.return_pct;
-      const cls = ret === null || ret === undefined ? "" : (ret > 0 ? "row-win" : "row-loss");
-      if (ret !== null && ret !== undefined) {
-        sumRet += ret;
-        if (ret > 0) winCnt++; else lossCnt++;
-      }
-      if (x.sold) soldCnt++;
-      const noData = x.sell_reason === "无后续K线" || x.sell_reason === "K线获取失败";
-      const verdict = noData ? "待买入(次日介入)" : (x.sold ? (ret > 0 ? "卖对了" : "止损卖出") : (ret > 0 ? "持有赚" : "持有亏"));
-      allRows.push({date: h.date, x, cls: noData ? "" : cls, verdict});
+// ---------- 历史复盘: 按归档日期分组 ----------
+const ENV_LABEL = {strong: "强势", normal: "中性", weak: "弱势"};
+
+function pctTxt(v) {
+  return (v === null || v === undefined) ? "-" : (v > 0 ? "+" : "") + v.toFixed(2) + "%";
+}
+function retColor(v) {
+  return (v === null || v === undefined) ? "#8a919f"
+       : (v > 0 ? "#c0392b" : (v < 0 ? "#1a7a3a" : "#5a6270"));
+}
+
+/* 跨日期趋势: 柱=当日平均收益率, 折线=累计收益率, 全部归档日期都保留 */
+function renderTrendSVG(daily) {
+  const W = 860, H = 190, PL = 44, PR = 16, PT = 12, PB = 24;
+  const iw = W - PL - PR, ih = H - PT - PB;
+  let vmax = 1;
+  daily.forEach(d => { vmax = Math.max(vmax, Math.abs(d.avg), Math.abs(d.cum)); });
+  vmax = Math.ceil(vmax * 1.15);
+  const y = v => PT + ih / 2 - (v / vmax) * (ih / 2);
+  const n = daily.length;
+  const bw = Math.max(2, Math.min(24, iw / Math.max(n, 1) * 0.55));
+  const x = i => (n === 1) ? PL + iw / 2 : PL + (iw - bw) * (i / (n - 1)) + bw / 2;
+  const zeroY = y(0);
+  let g = "";
+  [vmax, vmax / 2, 0, -vmax / 2, -vmax].forEach(t => {
+    g += `<line x1="${PL}" y1="${y(t).toFixed(1)}" x2="${W - PR}" y2="${y(t).toFixed(1)}" `
+       + `stroke="${t === 0 ? "#dfe3e8" : "#f2f4f7"}" stroke-width="1"/>`;
+    g += `<text x="${PL - 6}" y="${(y(t) + 3.5).toFixed(1)}" text-anchor="end" font-size="9.5" `
+       + `fill="#8a919f">${t > 0 ? "+" : ""}${t.toFixed(0)}%</text>`;
+  });
+  daily.forEach((d, i) => {
+    const yy = y(d.avg), h = Math.abs(zeroY - yy);
+    g += `<rect x="${(x(i) - bw / 2).toFixed(1)}" y="${Math.min(yy, zeroY).toFixed(1)}" `
+       + `width="${bw.toFixed(1)}" height="${Math.max(1, h).toFixed(1)}" fill="${retColor(d.avg)}" `
+       + `opacity=".78" rx="1"><title>${d.date} 均${pctTxt(d.avg)} · ${d.n}只</title></rect>`;
+  });
+  g += `<polyline points="${daily.map((d, i) => x(i).toFixed(1) + "," + y(d.cum).toFixed(1)).join(" ")}" `
+     + `fill="none" stroke="#1a6ee0" stroke-width="2" stroke-linejoin="round"/>`;
+  daily.forEach((d, i) => {
+    g += `<circle cx="${x(i).toFixed(1)}" cy="${y(d.cum).toFixed(1)}" r="2.4" fill="#1a6ee0">`
+       + `<title>${d.date} 累计${pctTxt(d.cum)}</title></circle>`;
+  });
+  const step = Math.max(1, Math.ceil(n / 12));
+  daily.forEach((d, i) => {
+    if (i % step === 0 || i === n - 1) {
+      g += `<text x="${x(i).toFixed(1)}" y="${H - 7}" text-anchor="middle" font-size="9" `
+         + `fill="#8a919f">${d.date.slice(5)}</text>`;
+    }
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${g}</svg>`;
+}
+
+/* 当日个股收益分布: 零轴居中的双向条 */
+function dayBars(rows, limit) {
+  const arr = rows.slice(0, limit || 15);
+  if (!arr.length) return '<div class="gmeta">该日无可介入股</div>';
+  let maxAbs = 1;
+  arr.forEach(r => { maxAbs = Math.max(maxAbs, Math.abs(r.ret || 0)); });
+  return arr.map(r => {
+    const v = r.ret || 0;
+    const w = (Math.abs(v) / maxAbs * 50).toFixed(1);
+    return `<div class="bar-row">
+      <span class="bn" title="${(r.x.name || "")} ${r.x.code || ""}">${(r.x.name || r.x.code || "-").slice(0, 6)}</span>
+      <span class="bt"><span class="bf" style="${v >= 0 ? "left:50%" : "right:50%"};width:${w}%;background:${retColor(v)}"></span></span>
+      <span class="bv" style="color:${retColor(v)}">${pctTxt(v)}</span>
+    </div>`;
+  }).join("");
+}
+
+function toggleGroup(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle("open");
+}
+function toggleAllGroups(open) {
+  document.querySelectorAll(".rgroup").forEach(el => el.classList.toggle("open", !!open));
+}
+
+/* 限制并发的串行拉取, 避免把VPS打爆 */
+async function mapLimit(arr, limit, fn) {
+  const out = new Array(arr.length);
+  let i = 0;
+  async function worker() {
+    while (i < arr.length) {
+      const idx = i++;
+      out[idx] = await fn(arr[idx], idx);
     }
   }
-  const matched = winCnt + lossCnt;
-  stats.innerHTML = matched ? `
-    <div class="item"><b style="color:${winCnt >= lossCnt ? "#c0392b" : "#1a7a3a"}">${(winCnt / matched * 100).toFixed(1)}%</b><span>胜率(${winCnt}赚/${lossCnt}亏)</span></div>
-    <div class="item"><b>${(sumRet / matched).toFixed(2)}%</b><span>平均收益率</span></div>
-    <div class="item"><b>${soldCnt}/${matched}</b><span>已卖出/总数</span></div>
-    <div class="item"><b>${list.length}</b><span>归档天数</span></div>` : "";
-  tbody.innerHTML = allRows.map(({date, x, cls, verdict}) => `<tr class="${cls}">
-    <td>${date}</td><td>${x.code}</td><td>${x.name}</td>
-    <td><b>${x.score ?? "-"}</b></td>
-    <td>${x.entry ?? "-"}</td><td>${x.stop ?? "-"}</td>
-    <td>${x.sell_date || (x.sold === false ? "持有中" : "-")}</td>
-    <td class="reason"><span class="ellip s" title="${x.sell_reason || ""}">${x.sell_reason || "-"}</span></td>
-    <td>${x.held_days ?? "-"}</td>
-    <td>${x.peak_gain_pct !== null && x.peak_gain_pct !== undefined ? "+" + x.peak_gain_pct.toFixed(1) : "-"}</td>
-    <td>${fmtPct(x.return_pct)}</td>
-    <td><b>${verdict}</b></td>
-  </tr>`).join("") || '<tr><td colspan="12" style="color:#999">暂无可介入股记录</td></tr>';
-  const tb = document.querySelector("#reconTable tbody");
-  tb.classList.remove("fade-in"); void tb.offsetWidth; tb.classList.add("fade-in");
-  // 移动端卡片: 盈亏底色直观
-  document.getElementById("mRecon").innerHTML = allRows.map(({date, x, cls, verdict}) => {
+  await Promise.all(Array.from({length: Math.min(limit, arr.length)}, worker));
+  return out;
+}
+
+async function renderHistory() {
+  const r = await fetch("api/history");
+  const list = await r.json();
+  const stats = document.getElementById("reconStats");
+  const box = document.getElementById("reconGroups");
+  const mbox = document.getElementById("mRecon");
+  const tools = document.getElementById("reconTools");
+  const hint = document.getElementById("reconHint");
+  const tp = document.getElementById("reconTrend");
+  if (!list.length) {
+    box.innerHTML = '<div class="hint" style="max-width:none;color:#999">暂无历史归档, 先运行筛选</div>';
+    return;
+  }
+  const dates = list.slice().sort((a, b) => (a.date < b.date ? 1 : -1));   // 日期倒序, 新的在前
+  const COLS = `<tr><th>代码</th><th>名称</th><th>评分</th><th>介入</th><th>止损</th>` +
+               `<th>卖出日</th><th>卖出原因</th><th>持有天数</th><th>最高盈利%</th><th>收益率%</th><th>结果</th></tr>`;
+
+  // 1) 先按日期建好全部占位块 —— 逐日对账要几十秒, 这样列表立刻可见, 之后边加载边填充
+  box.innerHTML = dates.map((h, i) => `<div class="rgroup ${i < 2 ? "open" : ""}" id="rg-${h.date}">
+    <div class="rgroup-head"><span class="arrow">&#9654;</span>
+      <span class="gdate">${h.date}</span>
+      <span class="genv ${h.env || ""}">${ENV_LABEL[h.env] || "-"}</span>
+      <span class="gmeta">对账中…</span></div>
+    <div class="rgroup-body"><span class="gmeta">正在拉K线回放…</span></div></div>`).join("");
+  mbox.innerHTML = dates.map((h, i) => `<div class="rgroup ${i < 2 ? "open" : ""}" id="mrg-${h.date}">
+    <div class="rgroup-head"><span class="arrow">&#9654;</span>
+      <span class="gdate">${h.date}</span>
+      <span class="genv ${h.env || ""}">${ENV_LABEL[h.env] || "-"}</span></div>
+    <div class="rgroup-body"><span class="gmeta">对账中…</span></div></div>`).join("");
+  tools.style.display = "flex";
+  tp.style.display = "block";
+  tp.innerHTML = '<div class="tp-title">跨日期趋势 · 加载中…</div>';
+
+  const byDate = {};
+  let winCnt = 0, lossCnt = 0, sumRet = 0, soldCnt = 0, doneCnt = 0;
+
+  function rowHtml(x, cls, verdict) {
+    return `<tr class="${cls}">
+      <td>${x.code}</td><td>${x.name}</td>
+      <td><b>${x.score ?? "-"}</b></td>
+      <td>${x.entry ?? "-"}</td><td>${x.stop ?? "-"}</td>
+      <td>${x.sell_date || (x.sold === false ? "持有中" : "-")}</td>
+      <td class="reason"><span class="ellip s" title="${x.sell_reason || ""}">${x.sell_reason || "-"}</span></td>
+      <td>${x.held_days ?? "-"}</td>
+      <td>${x.peak_gain_pct !== null && x.peak_gain_pct !== undefined ? "+" + x.peak_gain_pct.toFixed(1) : "-"}</td>
+      <td>${fmtPct(x.return_pct)}</td>
+      <td><b>${verdict}</b></td>
+    </tr>`;
+  }
+  function cardHtml(x, cls, verdict) {
     const mcls = cls === "row-win" ? "win" : (cls === "row-loss" ? "loss" : "");
     return `<div class="m-card ${mcls}">
       <div class="top">
         <span class="name">${x.name}</span> <span class="code">${x.code}</span>
-        <span class="price" style="color:${cls === 'row-win' ? '#1a7a3a' : (cls === 'row-loss' ? '#c0392b' : '#8a919f')}">${fmtPct(x.return_pct)}%</span>
+        <span class="price" style="color:${retColor(x.return_pct)}">${fmtPct(x.return_pct)}%</span>
       </div>
       <div class="metrics">
-        <span><span class="k">归档 </span>${date}</span>
         <span><span class="k">评分 </span>${x.score ?? "-"}</span>
         <span><span class="k">持有 </span>${x.held_days ?? "-"}天</span>
         <span><span class="k">介入 </span>${x.entry ?? "-"}</span>
@@ -755,7 +1046,97 @@ async function renderHistory() {
       </div>
       <div class="reason">卖出: ${x.sell_date || (x.sold === false ? "持有中" : "-")} · ${x.sell_reason || "-"} · <b>${verdict}</b></div>
     </div>`;
-  }).join("") || '<div class="m-card" style="text-align:center;color:#999">暂无可介入股记录</div>';
+  }
+  function headHtml(g, prefix) {
+    return `<div class="rgroup-head" onclick="toggleGroup('${prefix}-${g.date}')">
+      <span class="arrow">&#9654;</span>
+      <span class="gdate">${g.date}</span>
+      <span class="genv ${g.env || ""}">${ENV_LABEL[g.env] || "-"}</span>
+      <span class="gmeta">${g.rows.length} 只 · 胜率 ${g.winRate === null ? "-" : g.winRate.toFixed(0) + "%"}</span>
+      <span class="gnum" style="color:${retColor(g.avg)}">均 ${pctTxt(g.avg)}</span>
+    </div>`;
+  }
+  function paint(g) {
+    const el = document.getElementById("rg-" + g.date);
+    if (el) el.innerHTML = headHtml(g, "rg") + `<div class="rgroup-body">
+      <div class="trend-panel">
+        <div class="tp-title">当日收益分布(前15只, 按评分排序)</div>
+        ${dayBars(g.rows, 15)}
+      </div>
+      <div class="scrollbox" style="max-height:340px">
+        <table><thead>${COLS}</thead><tbody>
+        ${g.rows.map(({x, cls, verdict}) => rowHtml(x, cls, verdict)).join("")}
+        </tbody></table>
+      </div></div>`;
+    const me = document.getElementById("mrg-" + g.date);
+    if (me) me.innerHTML = headHtml(g, "mrg") + `<div class="rgroup-body">${
+      g.rows.map(({x, cls, verdict}) => cardHtml(x, cls, verdict)).join("")
+      || '<div class="m-card" style="text-align:center;color:#999">该日无可介入股</div>'}</div>`;
+  }
+  function repaintStats() {
+    const matched = winCnt + lossCnt;
+    stats.innerHTML = matched ? `
+      <div class="item"><b style="color:${winCnt >= lossCnt ? "#c0392b" : "#1a7a3a"}">${(winCnt / matched * 100).toFixed(1)}%</b><span>胜率(${winCnt}赚/${lossCnt}亏)</span></div>
+      <div class="item"><b>${(sumRet / matched).toFixed(2)}%</b><span>平均收益率</span></div>
+      <div class="item"><b>${soldCnt}/${matched}</b><span>已卖出/总数</span></div>
+      <div class="item"><b>${dates.length}</b><span>归档天数</span></div>` : "";
+    hint.textContent = `已加载 ${doneCnt}/${dates.length} 个归档日期 · 默认展开最近 2 天`;
+  }
+  function repaintTrend() {
+    const done = dates.filter(d => byDate[d.date]).slice().sort((a, b) => (a.date < b.date ? -1 : 1));
+    if (!done.length) return;
+    let cum = 0;
+    const daily = done.map(h => {
+      const g = byDate[h.date];
+      const avg = g.avg === null ? 0 : g.avg;
+      cum += avg;
+      return {date: h.date, avg: avg, cum: cum, n: g.rows.length};
+    });
+    tp.innerHTML = `<div class="tp-title">跨日期趋势 · 已加载 ${daily.length}/${dates.length} 个归档日期 &nbsp;|&nbsp;
+      <span style="color:#c0392b">&#9632;</span> 当日平均收益率 &nbsp;
+      <span style="color:#1a6ee0">&#9473;</span> 累计收益率 ${pctTxt(daily[daily.length - 1].cum)}</div>`
+      + renderTrendSVG(daily);
+  }
+
+  // 2) 逐日对账, 每完成一天立刻填充该天的分组(不等全部完成)
+  await mapLimit(dates, 3, async (h) => {
+    let d = null;
+    try {
+      const rr = await fetch(`api/history/${h.date}/reconcile`);
+      d = await rr.json();
+    } catch (e) {
+      d = null;
+    }
+    if (!d || d.ok === false) { doneCnt++; repaintStats(); return; }
+    const rows = (d.items || []).map(x => {
+      const ret = x.return_pct;
+      const noData = x.sell_reason === "无后续K线" || x.sell_reason === "K线获取失败";
+      const cls = (ret === null || ret === undefined || noData) ? "" : (ret > 0 ? "row-win" : "row-loss");
+      const verdict = noData ? "待买入(次日介入)"
+        : (x.sold ? (ret > 0 ? "卖对了" : "止损卖出") : (ret > 0 ? "持有赚" : "持有亏"));
+      if (ret !== null && ret !== undefined) {
+        sumRet += ret;
+        if (ret > 0) winCnt++; else lossCnt++;
+      }
+      if (x.sold) soldCnt++;
+      return {x: x, cls: cls, verdict: verdict, score: x.score || 0, ret: ret};
+    });
+    rows.sort((a, b) => (b.score - a.score));   // 组内按评分降序, 与归档内排序一致
+    const valid = rows.filter(v => v.ret !== null && v.ret !== undefined);
+    const w = valid.filter(v => v.ret > 0).length;
+    const g = {
+      date: h.date, env: h.env, rows: rows,
+      avg: valid.length ? valid.reduce((s, v) => s + v.ret, 0) / valid.length : null,
+      winRate: valid.length ? w / valid.length * 100 : null
+    };
+    byDate[h.date] = g;
+    doneCnt++;
+    paint(g); repaintStats(); repaintTrend();
+  });
+
+  if (!doneCnt) {
+    box.innerHTML = '<div class="hint" style="max-width:none;color:#999">暂无可复盘记录</div>';
+  }
 }
 </script>
 </body>
