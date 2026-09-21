@@ -38,6 +38,15 @@ def main():
     except Exception as e:
         print(f"[通知] 跳过: {e}", flush=True)
 
+    # 持仓环境轨迹(纯观测: 不预警 / 不改规则 / 不动卖出逻辑)
+    try:
+        from .logic.env_trail import record_today
+        n = record_today(result["layer1"]["env"])
+        if n:
+            print(f"[环境轨迹] 已记录 {n} 只持仓的当日环境", flush=True)
+    except Exception as e:
+        print(f"[环境轨迹] 跳过: {e}", flush=True)
+
     print(f"\n=== 大盘环境: {l1['env']} ({l1['passed']}/3) ===")
     for r in l1["reasons"]:
         print("  ", r)

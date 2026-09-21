@@ -85,11 +85,38 @@ def api_history_reconcile(date: str):
     return r
 
 
+@app.get("/api/validation")
+def validation_get():
+    from .logic.validate import load_validation
+    v = load_validation()
+    if v is None:
+        return {"ok": False, "msg": "尚未生成验证结果, 点下面的按钮生成"}
+    v["ok"] = True
+    return v
+
+
+@app.post("/api/validation/refresh")
+def validation_refresh():
+    from .logic.validate import eval_rules
+    try:
+        out = eval_rules()
+        out["ok"] = True
+        return out
+    except Exception as e:
+        return {"ok": False, "msg": str(e)}
+
+
 @app.get("/api/holdings")
 def holdings_get():
     from .logic.holding import judge_all
+    from .logic.env_trail import load_trail
     try:
-        return {"holdings": judge_all()}
+        hs = judge_all()
+        trail = load_trail()
+        for h in hs:
+            rec = trail.get(str(h.get("code", "")).strip()) or {}
+            h["env_trail"] = (rec.get("trail") or [])[-7:]
+        return {"holdings": hs}
     except Exception as e:
         return {"holdings": [], "error": str(e)}
 
@@ -393,6 +420,15 @@ tr.row-loss:hover td { background: #e2f3e7; }
   <div class="nav-bar" id="navBar"></div>
 </div>
 
+<div class="card" id="sec-validation">
+  <h2>卖出/预警规则验证 <span style="font-size:12px;color:#888">前向收益口径 · 只看规则触发那一刻往后是赚还是亏</span></h2>
+  <div id="validationBox"><div class="hint" style="max-width:none">加载中...</div></div>
+  <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+    <button class="btn" style="padding:6px 14px" onclick="refreshValidation()">重新验证</button>
+    <span class="hint" style="max-width:none">首次生成要拉全部K线, 约 3-5 分钟; 之后只补新归档日</span>
+  </div>
+</div>
+
 <div class="card" id="sec-holdings">
   <h2>持仓去留清单 <span style="font-size:12px;color:#888">每日 16:00 后自动判定 · 只认收盘价 · 任一规则触发即明日开盘卖出</span></h2>
   <div id="holdingsList"><div class="hint" style="max-width:none">加载中...</div></div>
@@ -619,6 +655,11 @@ function renderHoldingCard(h) {
     const st = stMap[r.status] || ["rule-green", "安全"];
     return `<div class="h-rule ${st[0]}"><span class="r-name">${r.rule}</span><span class="r-state">${st[1]}</span><span class="r-note">${r.note}</span></div>`;
   }).join("");
+  const trail = Array.isArray(h.env_trail) ? h.env_trail : [];
+  const trailHtml = trail.length ? `<div style="margin-top:6px;font-size:12px">
+      <span style="color:#888">持有期环境轨迹</span>
+      ${trail.map(t => `<span class="genv ${t.env || ""}" style="margin-left:4px">${ENV_LABEL[t.env] || "-"}</span>`).join("")}
+    </div>` : "";
   const err = h.error ? `<div class="hint" style="max-width:none;color:#c0392b">${h.error}</div>` : "";
   return `<div class="h-card">
     <div class="h-head">
@@ -635,6 +676,7 @@ function renderHoldingCard(h) {
       <span>持有 <b>${h.hold_days}</b> 个交易日</span>
       <span>peak浮盈 <b class="${h.peak_earn >= 0 ? "up" : "down"}">${peakTxt}</b></span>
     </div>
+    ${trailHtml}
     <div class="h-rules">${rules}</div>
     ${err}
   </div>`;
@@ -1138,6 +1180,66 @@ async function renderHistory() {
     box.innerHTML = '<div class="hint" style="max-width:none;color:#999">暂无可复盘记录</div>';
   }
 }
+
+async function loadValidation() {
+  try {
+    const r = await fetch("api/validation");
+    renderValidation(await r.json());
+  } catch (e) {
+    const box = document.getElementById("validationBox");
+    if (box) box.innerHTML = '<div class="hint" style="max-width:none">加载失败</div>';
+  }
+}
+
+function renderValidation(v) {
+  const box = document.getElementById("validationBox");
+  if (!v.ok) {
+    box.innerHTML = '<div class="hint" style="max-width:none">' + (v.msg || "暂无验证结果") + '</div>';
+    return;
+  }
+  const rows = (v.rules || []).map(r => {
+    if (r.note) return `<tr><td style="text-align:left">${r.name}</td><td colspan="6" class="hint">${r.note}</td></tr>`;
+    const bad = r.correct_rate !== undefined && r.correct_rate < 50;
+    const cls = bad ? "down" : "up";
+    const sgn = x => (x > 0 ? "+" : "") + x;
+    return `<tr>
+      <td style="text-align:left">${r.name}</td><td>${r.sample}</td><td>${r.hit_rate}%</td>
+      <td>${r.lags_mean}日</td><td class="${r.fwd_mean < 0 ? 'down' : 'up'}">${sgn(r.fwd_mean)}%</td>
+      <td class="${cls}" style="font-weight:600">${sgn(r.pair_mean)}%</td>
+      <td class="${cls}" style="font-weight:600">${r.correct_rate}%</td>
+    </tr>`;
+  }).join("");
+  box.innerHTML = `
+    <div class="hint" style="max-width:none;margin-bottom:8px">
+      样本 ${v.n_signals} 笔信号 / ${v.n_days} 个交易日 · 基准(持有第3日)前向收益 ${v.baseline_fwd_mean}%
+    </div>
+    <table style="width:100%;font-size:12px;border-collapse:collapse">
+      <thead><tr style="color:#888;text-align:right">
+        <th style="text-align:left">规则</th><th>样本</th><th>触发率</th><th>触发时持有</th><th>前向收益</th><th>配对差额</th><th>做对率</th>
+      </tr></thead>
+      <tbody style="text-align:right">${rows}</tbody>
+    </table>
+    <div class="hint" style="max-width:none;margin-top:8px">
+      配对差额 = 继续持有 − 触发时卖出，为负才说明规则有价值；做对率需 &gt; 50% 才算比抛硬币强。
+      低于 50% 的规则（绿色）一旦上线就是稳定亏钱。
+    </div>`;
+}
+
+async function refreshValidation() {
+  const btn = event.target;
+  btn.disabled = true; btn.textContent = "验证中...";
+  const box = document.getElementById("validationBox");
+  box.innerHTML = '<div class="hint" style="max-width:none">正在拉取K线并回放, 请稍候...</div>';
+  try {
+    const r = await fetch("api/validation/refresh", { method: "POST" });
+    renderValidation(await r.json());
+  } catch (e) {
+    box.innerHTML = '<div class="hint" style="max-width:none;color:#c0392b">生成失败: ' + e + '</div>';
+  }
+  btn.disabled = false; btn.textContent = "重新验证";
+}
+
+loadValidation();
 </script>
 </body>
 </html>"""
