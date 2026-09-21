@@ -5,6 +5,7 @@ L1 大盘环境(强/正常/偏弱) -> L2 板块强弱(正在加强/持续强势)
 """
 import datetime
 import json
+import threading
 import os
 import time
 
@@ -519,6 +520,47 @@ def load_history(date):
         return json.load(f)
 
 
+RECONCILE_CACHE_FILE = os.path.join(DATA_DIR, "reconcile_cache.json")
+_RC_LOCK = threading.Lock()
+
+# 卖出模拟结果里需要持久化的字段
+_RC_FIELDS = ("sell_date", "sell_price", "sell_reason", "return_pct",
+              "held_days", "peak_gain_pct", "sold", "win")
+
+
+def _rc_load():
+    with _RC_LOCK:
+        try:
+            with open(RECONCILE_CACHE_FILE, encoding="utf-8") as fp:
+                d = json.load(fp)
+            return d if isinstance(d, dict) else {}
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+
+def _rc_save(cache):
+    with _RC_LOCK:
+        tmp = RECONCILE_CACHE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fp:
+            json.dump(cache, fp, ensure_ascii=False)
+        os.replace(tmp, RECONCILE_CACHE_FILE)
+
+
+def clear_reconcile_cache():
+    """清空复盘缓存(数据源修正历史K线时用)"""
+    with _RC_LOCK:
+        try:
+            os.remove(RECONCILE_CACHE_FILE)
+            return True
+        except FileNotFoundError:
+            return False
+
+
+def reconcile_cache_stats():
+    c = _rc_load()
+    return {"cached": len(c), "final": sum(1 for v in c.values() if v.get("final"))}
+
+
 def reconcile_history(date, with_exit_sim=True):
     """对账: 历史某日可介入股, 卖出模拟(逐日K线回放判定卖出点) + 当前持仓盈亏"""
     hist = load_history(date)
@@ -540,16 +582,38 @@ def reconcile_history(date, with_exit_sim=True):
         }
         items.append(item)
 
-    def sim_one(item):
+    # 已定型(卖出日已过)的结果直接复用, 只有未定型/没缓存的才真正回放
+    cache = _rc_load()
+    today = _today_str()
+    todo = []
+    for item in items:
+        key = "%s|%s" % (item.get("code"), date)
+        c = cache.get(key)
+        if c and c.get("final"):
+            for k in _RC_FIELDS:
+                if k in c:
+                    item[k] = c[k]
+        else:
+            todo.append((key, item))
+
+    def sim_one(pair):
+        key, item = pair
         if item["entry"] and item["stop"]:
             s = simulate_exit(item["code"], item["entry"], item["stop"], date)
             item.update(s)
             item["sold"] = s["sell_date"] is not None
             item["win"] = (s["return_pct"] or 0) > 0
+            rec = {k: item.get(k) for k in _RC_FIELDS}
+            # 卖出日已经过去的信号, 结果永久不变 -> 可持久化
+            rec["final"] = bool(s["sell_date"]) and s["sell_date"] < today
+            rec["cached_at"] = today
+            cache[key] = rec
         return item
 
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        items = list(ex.map(sim_one, items))
+    if todo:
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            list(ex.map(sim_one, todo))
+        _rc_save(cache)
 
     items.sort(key=lambda x: (x.get("return_pct") if x.get("return_pct") is not None else -999), reverse=True)
     valid = [x["return_pct"] for x in items if x.get("return_pct") is not None]
