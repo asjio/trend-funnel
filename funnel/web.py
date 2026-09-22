@@ -1198,27 +1198,38 @@ function renderValidation(v) {
     return;
   }
   const rows = (v.rules || []).map(r => {
-    if (r.note) return `<tr><td style="text-align:left">${r.name}</td><td colspan="6" class="hint">${r.note}</td></tr>`;
+    if (r.note) return `<tr><td style="text-align:left;padding:6px 8px">${r.name}</td><td colspan="6" style="text-align:right;padding:6px 8px" class="hint">${r.note}</td></tr>`;
     const bad = r.correct_rate !== undefined && r.correct_rate < 50;
     const cls = bad ? "down" : "up";
     const sgn = x => (x > 0 ? "+" : "") + x;
     return `<tr>
-      <td style="text-align:left">${r.name}</td><td>${r.sample}</td><td>${r.hit_rate}%</td>
-      <td>${r.lags_mean}日</td><td class="${r.fwd_mean < 0 ? 'down' : 'up'}">${sgn(r.fwd_mean)}%</td>
-      <td class="${cls}" style="font-weight:600">${sgn(r.pair_mean)}%</td>
-      <td class="${cls}" style="font-weight:600">${r.correct_rate}%</td>
+      <td style="text-align:left;padding:6px 8px">${r.name}</td>
+      <td style="text-align:right;padding:6px 8px">${r.sample}</td>
+      <td style="text-align:right;padding:6px 8px">${r.hit_rate}%</td>
+      <td style="text-align:right;padding:6px 8px">${r.lags_mean}日</td>
+      <td style="text-align:right;padding:6px 8px" class="${r.fwd_mean < 0 ? 'down' : 'up'}">${sgn(r.fwd_mean)}%</td>
+      <td style="text-align:right;padding:6px 8px" class="${cls}" style="font-weight:600">${sgn(r.pair_mean)}%</td>
+      <td style="text-align:right;padding:6px 8px" class="${cls}" style="font-weight:600">${r.correct_rate}%</td>
     </tr>`;
   }).join("");
   box.innerHTML = `
     <div class="hint" style="max-width:none;margin-bottom:8px">
       样本 ${v.n_signals} 笔信号 / ${v.n_days} 个交易日 · 基准(持有第3日)前向收益 ${v.baseline_fwd_mean}%
     </div>
-    <table style="width:100%;font-size:12px;border-collapse:collapse">
-      <thead><tr style="color:#888;text-align:right">
-        <th style="text-align:left">规则</th><th>样本</th><th>触发率</th><th>触发时持有</th><th>前向收益</th><th>配对差额</th><th>做对率</th>
+    <div style="overflow-x:auto">
+    <table style="width:100%;min-width:560px;font-size:12px;border-collapse:collapse">
+      <thead><tr style="color:#888;background:#fafbfc">
+        <th style="text-align:left;padding:6px 8px;font-weight:500">规则</th>
+        <th style="text-align:right;padding:6px 8px;font-weight:500">样本</th>
+        <th style="text-align:right;padding:6px 8px;font-weight:500">触发率</th>
+        <th style="text-align:right;padding:6px 8px;font-weight:500">触发时持有</th>
+        <th style="text-align:right;padding:6px 8px;font-weight:500">前向收益</th>
+        <th style="text-align:right;padding:6px 8px;font-weight:500">配对差额</th>
+        <th style="text-align:right;padding:6px 8px;font-weight:500">做对率</th>
       </tr></thead>
-      <tbody style="text-align:right">${rows}</tbody>
+      <tbody>${rows}</tbody>
     </table>
+    </div>
     <div class="hint" style="max-width:none;margin-top:8px">
       配对差额 = 继续持有 − 触发时卖出，为负才说明规则有价值；做对率需 &gt; 50% 才算比抛硬币强。
       低于 50% 的规则（绿色）一旦上线就是稳定亏钱。
